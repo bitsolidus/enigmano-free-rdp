@@ -48,12 +48,16 @@ jobs:
       run: |
         Write-Host "Downloading ngrok..." -ForegroundColor Green
         Invoke-WebRequest -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile "ngrok.zip"
-        Expand-Archive ngrok.zip -DestinationPath C:\ngrok
+        Expand-Archive ngrok.zip -DestinationPath C:\ngrok -Force
+        Write-Host "ngrok version:"
+        C:\ngrok\ngrok.exe --version
 
     - name: Configure ngrok
       run: |
         Write-Host "Configuring ngrok..." -ForegroundColor Green
         C:\ngrok\ngrok.exe config add-authtoken ${{ secrets.NGROK_SHAHZAIB }}
+        Write-Host "Verifying ngrok config..." -ForegroundColor Yellow
+        C:\ngrok\ngrok.exe config check
 
     - name: Install Essential Software
       run: |
@@ -61,9 +65,9 @@ jobs:
         Set-ExecutionPolicy Bypass -Scope Process -Force
         [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
         iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-        choco install googlechrome -y
-        choco install 7zip -y
-        choco install notepadplusplus -y
+        choco install googlechrome -y --no-progress
+        choco install 7zip -y --no-progress
+        choco install notepadplusplus -y --no-progress
         Write-Host "Software installation completed!" -ForegroundColor Green
 
     - name: Configure Chrome Extensions
@@ -89,8 +93,29 @@ jobs:
     - name: Start ngrok Tunnel
       run: |
         Write-Host "Starting ngrok tunnel..." -ForegroundColor Green
-        Start-Process -FilePath "C:\ngrok\ngrok.exe" -ArgumentList "tcp 3389" -WindowStyle Hidden
-        Start-Sleep -Seconds 10
+        Start-Process -FilePath "C:\ngrok\ngrok.exe" -ArgumentList "tcp 3389 --log=stdout" -WindowStyle Hidden -RedirectStandardOutput "C:\ngrok\ngrok-out.log" -RedirectStandardError "C:\ngrok\ngrok-err.log"
+        Write-Host "Waiting for ngrok to initialize..." -ForegroundColor Yellow
+        $ready = $false
+        for ($i = 1; $i -le 20; $i++) {
+          Start-Sleep -Seconds 3
+          try {
+            $api = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -TimeoutSec 5
+            if ($api.tunnels.Count -gt 0) {
+              Write-Host "ngrok tunnel ready: $($api.tunnels[0].public_url)" -ForegroundColor Green
+              $ready = $true
+              break
+            }
+          } catch {
+            Write-Host "Attempt $i/20 - not ready yet..." -ForegroundColor Yellow
+          }
+        }
+        if (-not $ready) {
+          Write-Host "=== ngrok stdout log ===" -ForegroundColor Red
+          Get-Content "C:\ngrok\ngrok-out.log" -ErrorAction SilentlyContinue
+          Write-Host "=== ngrok stderr log ===" -ForegroundColor Red
+          Get-Content "C:\ngrok\ngrok-err.log" -ErrorAction SilentlyContinue
+          exit 1
+        }
 
     - name: Get Connection Details
       run: |
